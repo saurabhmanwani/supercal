@@ -1,0 +1,75 @@
+package com.optus.supercal.util.email;
+
+import java.io.Serializable;
+
+import javax.activation.DataHandler;
+import javax.activation.DataSource;
+import javax.mail.Message;
+import javax.mail.Multipart;
+import javax.mail.Session;
+import javax.mail.Transport;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeBodyPart;
+import javax.mail.internet.MimeMessage;
+import javax.mail.internet.MimeMultipart;
+import javax.mail.util.ByteArrayDataSource;
+
+public class EmailSender implements Serializable {
+
+	private static final long serialVersionUID = 4173395839849393030L;
+    
+	private static final EmailSender instance = new EmailSender();
+
+	public static EmailSender getInstance() {
+		return instance;
+	}
+    
+	public void sendMail(String[] fromAddress, String[] toAddress, 
+		String subject,	String mailBody, byte[] topBanner, byte[] bottomBanner)
+		throws Exception {
+
+	//	Session mailSession = (Session) Component.getInstance(
+	//			MailSession.class, APPLICATION);
+		
+		// get Session mailSession ???
+		
+		Session mailSession =  null ;
+		
+		Transport transport = mailSession.getTransport();
+		
+		MimeMessage message = new MimeMessage(mailSession);
+		message.setSubject(subject);
+		message.setFrom(new InternetAddress(fromAddress[0], fromAddress[1]));
+		
+		InternetAddress toInternetAddress  
+			= new InternetAddress(toAddress[0],	toAddress[1]);
+		
+		message.addRecipient(Message.RecipientType.TO, toInternetAddress);
+
+		Multipart multipart = new MimeMultipart("related");
+		MimeBodyPart mailBodyPart = new MimeBodyPart();	
+		mailBodyPart.setContent(mailBody, "text/html");
+		multipart.addBodyPart(mailBodyPart);
+		
+		MimeBodyPart bannerPart = new MimeBodyPart();
+		DataSource dataSource = new ByteArrayDataSource(topBanner, "image/jpeg");
+		bannerPart.setDataHandler(new DataHandler(dataSource));
+		bannerPart.setHeader("Content-ID", "topImg-id");
+		bannerPart.setDisposition("inline");
+		multipart.addBodyPart(bannerPart);
+		
+		bannerPart = new MimeBodyPart();
+		dataSource = new ByteArrayDataSource(bottomBanner, "image/jpeg");
+		bannerPart.setDataHandler(new DataHandler(dataSource));
+		bannerPart.setHeader("Content-ID", "bottomImg-id");
+		bannerPart.setDisposition("inline");
+		multipart.addBodyPart(bannerPart);	
+		
+		message.setContent(multipart);
+		
+		transport.connect();
+		transport.sendMessage(message, message.getAllRecipients());
+		transport.close();
+
+	}
+}

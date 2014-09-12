@@ -1,0 +1,41 @@
+K 25
+svn:wc:ra_dav:version-url
+V 92
+/express/!svn/ver/7587/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email
+END
+EmailContactInfo.java
+K 25
+svn:wc:ra_dav:version-url
+V 114
+/express/!svn/ver/7424/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email/EmailContactInfo.java
+END
+EmailContent.java
+K 25
+svn:wc:ra_dav:version-url
+V 110
+/express/!svn/ver/7424/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email/EmailContent.java
+END
+RestOpomEmailBuilder.java
+K 25
+svn:wc:ra_dav:version-url
+V 118
+/express/!svn/ver/7587/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email/RestOpomEmailBuilder.java
+END
+BoltOnAdditionEmailBuilder.java
+K 25
+svn:wc:ra_dav:version-url
+V 124
+/express/!svn/ver/7499/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email/BoltOnAdditionEmailBuilder.java
+END
+EmailSender.java
+K 25
+svn:wc:ra_dav:version-url
+V 109
+/express/!svn/ver/7424/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email/EmailSender.java
+END
+RatePlanChangeEmailBuilder.java
+K 25
+svn:wc:ra_dav:version-url
+V 124
+/express/!svn/ver/7498/trunk/smb/supercal/src/hot/au/com/optus/express/supercal/action/email/RatePlanChangeEmailBuilder.java
+END

@@ -1,0 +1,274 @@
+package com.optus.supercal.util.email;
+
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.persistence.EntityManager;
+
+import org.apache.commons.lang3.text.StrSubstitutor;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.optus.supercal.dao.EmailDAO;
+import com.optus.supercal.entity.EmailRatePlanChange;
+import com.optus.supercal.entity.EmailTemplate;
+import com.optus.supercal.entity.EmailTemplateRatePlanFieldConfig;
+import com.optus.supercal.entity.RatePlan;
+import com.optus.supercal.entity.RatePlanFieldValue;
+
+public class RatePlanChangeEmailBuilder {
+	    
+    @Autowired
+    EmailDAO emailDAO;
+    
+	
+    EntityManager entityManager;
+	
+	private Map<String, String> newRatePlanFieldValueMap;
+	
+	private Map<String, String> oldRatePlanFieldValueMap; 
+	
+	private List<String> emailFields; 
+	
+	private EmailTemplate emailTemplate;
+	
+	private EmailContent emailContent;
+	
+	private EmailRatePlanChange emailRatePlanChange;
+	
+	private static String TEMPLATE_TYPE = "RATE_PLAN_CHANGE_EMAIL";
+	
+	private static String sentStatus = "SENT";
+	private static String notSentStatus = "NOTSENT";
+	private static String reSentStatus = "RESENT";
+	private static String notReSentStatus = "NOTRESENT";
+	
+	public boolean sendEmail(EmailRatePlanChange emailRatePlanChange) {
+	//	log.debug("Inside sendRateChangeConfirmEmail");
+		try {
+			if (emailTemplate == null) {
+				emailTemplate = emailDAO.findEmailTemplate(TEMPLATE_TYPE);
+			}
+			setEmailRatePlanChange(emailRatePlanChange);
+			RatePlan oldRatePlan = entityManager.find(RatePlan.class, 
+					emailRatePlanChange.getOldRatePlanId());			
+			RatePlan newRatePlan = entityManager.find(RatePlan.class, 
+					emailRatePlanChange.getNewRatePlanId());
+			newRatePlanFieldValueMap = new HashMap<String, String>();
+			oldRatePlanFieldValueMap = new HashMap<String, String>();
+			emailFields = new ArrayList<String>(0);
+			Set<RatePlanFieldValue> oldRatePlanFieldValues 
+				= oldRatePlan.getRatePlanFieldValues();
+			
+			Set<RatePlanFieldValue> newRatePlanFieldValues 
+				= newRatePlan.getRatePlanFieldValues();
+
+			if ("RATEPLAN".equals(emailTemplate.getFieldSource())) {
+				try {
+					List<EmailTemplateRatePlanFieldConfig> ratePlanFieldConfigs 
+						= emailTemplate.getRatePlanFieldConfigList();
+					String key = "";
+					for (EmailTemplateRatePlanFieldConfig ratePlanFieldConfig 
+							: ratePlanFieldConfigs) {
+						
+						for (RatePlanFieldValue ratePlanFieldValue : oldRatePlanFieldValues) {
+							if (ratePlanFieldValue.getRatePlanFamilyFieldConfig()
+									.getRatePlanField().equals(
+									ratePlanFieldConfig.getRatePlanField())) {
+								key = ratePlanFieldConfig.getRatePlanField()
+									.getFieldName();
+								if (!emailFields.contains(key)) {
+									emailFields.add(key);
+								}
+								oldRatePlanFieldValueMap.put(key, ratePlanFieldValue
+									.getRatePlanFieldValue());
+							}
+						}
+						
+						for (RatePlanFieldValue ratePlanFieldValue : newRatePlanFieldValues) {
+							if (ratePlanFieldValue.getRatePlanFamilyFieldConfig()
+									.getRatePlanField().equals(
+									ratePlanFieldConfig.getRatePlanField())) {
+								key = ratePlanFieldConfig.getRatePlanField()
+									.getFieldName();
+								if (!emailFields.contains(key)) {
+									emailFields.add(key);
+								}
+								newRatePlanFieldValueMap.put(key, ratePlanFieldValue
+									.getRatePlanFieldValue());
+							}
+						}
+					}
+					
+					StringBuffer messageBuffer = new StringBuffer();
+					String message = buildMessage(newRatePlan);
+					emailRatePlanChange.setTopBanner(emailTemplate.getTopBanner());
+					emailRatePlanChange.setEmailMessage(message);
+					messageBuffer.append("<html><body>")
+						.append("<table style='font-family: verdana, geneva; font-size: 9pt;' ")
+						.append("width='600' align='center'>")
+						.append("<tr><td><img src='cid:topImg-id'></td></tr>")
+						.append(message)
+						.append("<tr><td><img src='cid:bottomImg-id'></td></tr>")
+						.append("</table></body></html>");
+					message = messageBuffer.toString();
+					EmailSender emailSender = EmailSender.getInstance();
+					emailSender.sendMail(
+						new String[] {"NoReply@optus.com.au", "Optus Business"},
+						new String[] {emailRatePlanChange.getEmailAddress(), 
+								emailRatePlanChange.getCustomerFirstName() + " " 
+										+ emailRatePlanChange.getCustomerSurname()},
+						emailTemplate.getSubject(), message, emailTemplate.getTopBanner(), 
+						emailTemplate.getBottomBanner());
+					emailRatePlanChange.setBottomBanner(emailTemplate.getBottomBanner());
+					emailRatePlanChange.setEmailDateTime(new Date(System.currentTimeMillis()));
+					emailRatePlanChange.setEmailTemplate("RatePlanChangeEmail");
+					emailRatePlanChange.setSendStatus(sentStatus);
+				//	log.debug("Email sent successfully");
+				} catch (Exception e) {
+				//	log.debug("Email sending failed: " + e.getMessage());
+					emailRatePlanChange.setEmailDateTime(new Date(System.currentTimeMillis()));
+					emailRatePlanChange.setEmailTemplate("RatePlanChangeEmail");
+					emailRatePlanChange.setSendStatus(notSentStatus);
+					return false;
+				}
+			}		    
+		} catch (Exception e) {
+		//	log.error("Error sending mail.", e);
+			emailRatePlanChange.setEmailDateTime(new Date(System.currentTimeMillis()));
+			emailRatePlanChange.setEmailTemplate("RatePlanChangeEmail");
+			emailRatePlanChange.setSendStatus(notSentStatus);
+			return false;
+		}
+		return true;
+	}
+	
+	private String buildMessage(RatePlan newRatePlan){
+		StringBuffer msgBuffer = new StringBuffer();
+		Map<String, String> valuesMap = new HashMap<String, String>();
+		msgBuffer.append(emailRatePlanChange.getCustomerTitle().trim()).append("&nbsp;")				
+			.append(emailRatePlanChange.getCustomerFirstName().trim()).append("&nbsp;")
+			.append(emailRatePlanChange.getCustomerSurname().trim());
+		valuesMap.put("CustomerName", msgBuffer.toString());
+		valuesMap.put("RatePlanName", newRatePlan.getRatePlanId());
+		StrSubstitutor sub = new StrSubstitutor(valuesMap);
+
+		msgBuffer = new StringBuffer();
+		msgBuffer.append("<tr><td>").append(sub.replace(emailTemplate.getTopTextArea()))
+				.append("</td></tr>")
+				.append("<tr><td><p><table style='font-family: verdana, geneva; font-size: 9pt;'>")
+				.append("<tr><td><b>Mobile Service Number </b></td><td>: ")
+				.append(emailRatePlanChange.getServiceNo())
+				.append("</td></tr><tr><td><b>Rate Plan Change Fee </b></td><td>: $")
+				.append(roundTwoDecimals(emailRatePlanChange.getRatePlanChangeFee()))
+				.append("</td></tr></table></p></td></tr>")
+				.append("<tr><td><p><table style='border: 1px solid black; ")
+				.append("border-collapse:collapse; font-family: verdana, geneva; font-size: 9pt;'>")
+				.append("<tr><th style='border: 1px solid black;'><b>Rate Plan Details</b></th>")
+				.append("<th style='border: 1px solid black;'><b>Old Rate Plan</b></th>")
+				.append("<th style='border: 1px solid black;'><b>New Rate Plan</b></th></tr>");
+				for (String key : emailFields) {
+					String oldValue = oldRatePlanFieldValueMap.get(key);
+					String newValue = newRatePlanFieldValueMap.get(key);
+					msgBuffer.append("<tr><td style='border: 1px solid black;'><b>" + key)
+					.append("</b></td><td style='border: 1px solid black;'>")
+					.append((oldValue != null) ? oldValue : "")
+					.append("</td><td style='border: 1px solid black;'>")
+					.append((newValue != null) ? newValue : "")
+					.append("</td></tr>");					
+				}
+		msgBuffer.append("</table></p></td></tr><tr><td>")
+				.append(emailTemplate.getBottomTextArea())
+				.append("</td></tr>");
+		return msgBuffer.toString();
+	}
+	
+	public boolean reSendEmail(EmailRatePlanChange emailRatePlanChange) {
+		// log.debug("Inside sendRateChangeConfirmEmail");
+		try {
+			if (emailTemplate == null) {
+				emailTemplate = emailDAO.findEmailTemplate(TEMPLATE_TYPE);
+			}
+			StringBuffer messageBuffer = new StringBuffer();
+			messageBuffer.append("<html><body>")
+				.append("<table style='font-family: verdana, geneva; font-size: 9pt;' ")
+				.append("width='600' align='center'>")
+				.append("<tr><td><img src='cid:topImg-id'></td></tr>")
+				.append(emailRatePlanChange.getEmailMessage())
+				.append("<tr><td><img src='cid:bottomImg-id'></td></tr>")
+				.append("</table></body></html>");
+			String message = messageBuffer.toString();
+			EmailSender emailSender = EmailSender.getInstance();
+			emailSender.sendMail(
+				new String[] {"NoReply@optus.com.au", "Optus Business"},
+				new String[] {emailRatePlanChange.getEmailAddress(), 
+						emailRatePlanChange.getCustomerFirstName().trim() + " " 
+						+ emailRatePlanChange.getCustomerSurname().trim()},
+				emailTemplate.getSubject(), message, emailRatePlanChange.getTopBanner(), 
+				emailRatePlanChange.getBottomBanner());
+			emailRatePlanChange.setEmailDateTime(new Date(System.currentTimeMillis()));
+			emailRatePlanChange.setSendStatus(reSentStatus);
+		//	log.debug("Email Re sent successfully");			
+			
+		} catch (Exception e) {
+		//	log.debug("Email Re Sending failed: " + e.getMessage());
+			emailRatePlanChange.setEmailDateTime(new Date(System.currentTimeMillis()));
+			emailRatePlanChange.setEmailTemplate("RatePlanChangeEmail");
+			emailRatePlanChange.setSendStatus(notReSentStatus);
+			return false;
+		}
+		return true;
+	}
+
+	public Map<String, String> getOldRatePlanFieldValueMap() {
+		return oldRatePlanFieldValueMap;
+	}
+
+	public void setOldRatePlanFieldValueMap(Map<String, String> 
+		oldRatePlanFieldValueMap) {
+		this.oldRatePlanFieldValueMap = oldRatePlanFieldValueMap;
+	}
+	
+	public Map<String, String> getNewRatePlanFieldValueMap() {
+		return newRatePlanFieldValueMap;
+	}
+
+	public void setNewRatePlanFieldValueMap(Map<String, String> 
+		newRatePlanFieldValueMap) {
+		this.newRatePlanFieldValueMap = newRatePlanFieldValueMap;
+	}
+	
+	public EmailTemplate getEmailTemplate() {
+		return emailTemplate;
+	}
+
+	public void setEmailTemplate(EmailTemplate emailTemplate) {
+		this.emailTemplate = emailTemplate;
+	}
+
+	public EmailRatePlanChange getEmailRatePlanChange() {
+		return emailRatePlanChange;
+	}
+
+	public void setEmailRatePlanChange(EmailRatePlanChange emailRatePlanChange) {
+		this.emailRatePlanChange = emailRatePlanChange;
+	}
+
+	public EmailContent getEmailContent() {
+		return emailContent;
+	}
+
+	public void setEmailContent(EmailContent emailContent) {
+		this.emailContent = emailContent;
+	}
+	
+	private String roundTwoDecimals(double theNumber) {
+	    DecimalFormat twoDecimalForm = new DecimalFormat("###0.00");
+	    return twoDecimalForm.format(theNumber);
+	}
+
+}

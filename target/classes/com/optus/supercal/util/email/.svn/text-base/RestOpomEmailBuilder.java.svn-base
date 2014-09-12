@@ -1,0 +1,566 @@
+package au.com.optus.express.supercal.action.email;
+
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.mail.internet.InternetAddress;
+import javax.persistence.EntityManager;
+import javax.ws.rs.GET;
+import javax.ws.rs.Path;
+
+import org.apache.commons.lang.text.StrSubstitutor;
+import org.hibernate.Session;
+import org.hibernate.persister.entity.AbstractEntityPersister;
+import org.jboss.seam.annotations.AutoCreate;
+import org.jboss.seam.annotations.In;
+import org.jboss.seam.annotations.Logger;
+import org.jboss.seam.annotations.Name;
+import org.jboss.seam.annotations.Transactional;
+import org.jboss.seam.log.Log;
+import org.jboss.seam.resteasy.ResourceQuery;
+
+import au.com.optus.express.supercal.action.utils.LookupQuery;
+import au.com.optus.express.supercal.model.AutoEmailLog;
+import au.com.optus.express.supercal.model.EmailTemplate;
+import au.com.optus.express.supercal.model.OpomData;
+import au.com.optus.express.supercal.model.OpomDataArchive;
+import au.com.optus.express.supercal.model.OpomEmailField;
+import au.com.optus.express.supercal.model.RetailStore;
+
+@Name("restOpomEmailBuilder")
+@AutoCreate
+@Path("opom")
+public class RestOpomEmailBuilder extends ResourceQuery<Object> {
+	    
+	@Logger
+    Log log;
+    
+	@In(create=true)
+    EntityManager entityManager;
+	
+	@In(create=true)
+	private LookupQuery lookupQuery;
+	
+	private EmailTemplate emailTemplate;
+	
+	private Map<String, List<OpomData>> opomDataByOrderNo
+		= new HashMap<String, List<OpomData>>(); 
+	
+	private Map<String, RetailStore> retailStoreByDealerCode 
+		= new HashMap<String, RetailStore>(0);
+	
+	private Map<String, String> columnPropertyMap
+		= new HashMap<String, String>();
+	
+	private Map<String, List<String>> emailFieldsByGroupName
+		= new HashMap<String, List<String>>();
+	
+	private Map<String, String> valuesMap = new HashMap<String, String>();
+	
+	private SimpleDateFormat datePaser = new SimpleDateFormat("yyyy-MM-dd");
+	private SimpleDateFormat dateFormatter = new SimpleDateFormat("dd/MM/yyyy");
+	private EmailContent emailContent;
+	private static String sentStatus = "SENT";
+	private static String sentInvalidStatus = "SENTINVALID";
+	private static String notSentStatus = "NOTSENT";
+	private static String reSentStatus = "RESENT";
+	private static String notReSentStatus = "NOTRESENT";
+	
+	private static String[] emailFilter = new String[] {"@optus.com.au",
+		"@optus.com", "noemail@", "no.email@", "no_email@", "none", "no@none",
+		"@noemail", "@no.email", "@no_email", "noemail", "null", "declined"};
+	
+	public void sendOpomEmail() {
+		processOPOMData();
+	}
+
+	public EmailTemplate getEmailTemplate() {
+		return emailTemplate;
+	}
+
+	public void setEmailTemplate(EmailTemplate emailTemplate) {
+		this.emailTemplate = emailTemplate;
+	}
+	
+	@GET
+	@Path("sendemail")
+	@Transactional
+	public void processOPOMData() {
+
+		if (emailTemplate == null) {
+			emailTemplate = lookupQuery.findEmailTemplateByChannel("Retail");
+		}
+		if (columnPropertyMap.isEmpty()) {
+			AbstractEntityPersister aep = ((AbstractEntityPersister)(
+					(Session) entityManager.getDelegate()).getSessionFactory()
+					.getClassMetadata(OpomData.class));
+			
+			String[] properties = aep.getPropertyNames();
+			for (int nameIndex = 0; nameIndex != properties.length; nameIndex++) {
+				String[] columns = aep.getPropertyColumnNames(nameIndex);
+				for (int columnIndex = 0; columnIndex != columns.length; 
+						columnIndex++) {
+					columnPropertyMap.put(columns[columnIndex],
+							properties[nameIndex]);
+				}
+			}
+		}
+		if (emailFieldsByGroupName.isEmpty()) {
+			setEmailFieldsByGroupName(lookupQuery.getEmailFieldByGroupName());
+		}
+		
+		opomDataByOrderNo = lookupQuery.getOpomDataByOrderNo();
+		retailStoreByDealerCode = lookupQuery.getRetailStores();
+		Set<String> keySet = opomDataByOrderNo.keySet();
+		int processCount = 0;
+		for (String key : keySet) {
+			
+			log.debug("Current processing Record : " + processCount++);
+
+			List<OpomData> opomDataList = opomDataByOrderNo.get(key);
+			OpomData firstData = opomDataList.get(0);
+			String channel = firstData.getReportParentGroupCode();
+			String indicator = firstData.getGaDaInd();
+			String emailId = firstData.getEmailAddr();
+			String accountNumber = firstData.getSrcAccountNumber();
+	        valuesMap.put("SRC_ACCOUNT_NUMBER", accountNumber);			
+			setEmailContent(new EmailContent(opomDataList));
+			if ("Retail".equalsIgnoreCase(channel) 
+					&& "GA".equalsIgnoreCase(indicator)) {
+				try {
+					sendTabularFormatEmail(emailId);
+				} catch (Exception e) {
+					log.debug("Email sending failed: " + e.getMessage());
+					e.printStackTrace();
+				}
+			}
+		}
+		log.debug("Number of Record Processed : " + processCount);
+		entityManager.flush();
+	}
+	
+	private String sendTabularFormatEmail(String emailId) {
+		StringBuffer messageBuffer = new StringBuffer();
+		String message = buildMessage();
+		messageBuffer.append("<html><body>")
+			.append("<table style='font-family: verdana, geneva; font-size: 9pt;' ")
+			.append("width='600' align='center'>")
+			.append("<tr><td><img src='cid:topImg-id'></td></tr><tr><td></td></tr>")
+			.append(message)
+			.append("<tr><td></td></tr>")
+			.append("<tr><td></td></tr><tr><td><img src='cid:bottomImg-id'>")
+			.append("</td></tr></table></body></html>");
+		String messageBody = messageBuffer.toString();
+		if (emailId != null && !emailId.trim().isEmpty()) {
+			try {
+				@SuppressWarnings("unused")
+				InternetAddress emailValidate = new InternetAddress(emailId, true);
+				EmailSender emailSender = EmailSender.getInstance();
+				emailSender.sendMail(
+					new String[] {"NoReply@optus.com.au", "Optus Business"},
+					new String[] {emailId, ""},
+					//new String[] {"Sivalingam.Sivasuthan@optus.com.au", ""},
+					emailTemplate.getSubject(), messageBody, emailTemplate.getTopBanner(), 
+					emailTemplate.getBottomBanner());
+				if (validateEmailAddress(emailId)) {
+					logEmailDetails(message, sentStatus);
+				} else {
+					logEmailDetails(message, sentInvalidStatus);
+				}
+				log.debug("Email Sent successfully");
+			} catch (Exception e) {
+				logEmailDetails(message, notSentStatus);
+				log.debug("Email Not Sent!");
+			}
+		} else {
+			logEmailDetails(message, notSentStatus);
+			log.debug("Email Not Sent!");
+		}
+		return message;
+	}
+	/**
+	 * Filter email base on email filter 
+	 * @return
+	 */
+	private boolean validateEmailAddress(String emailAddress){
+		for (String filter : emailFilter) {
+			if(emailAddress.toLowerCase().contains(filter.toLowerCase())) {
+				return false;
+			}
+		}
+		return true;
+	}
+	
+	private String buildMessage() {
+		StringBuffer msgBuffer = new StringBuffer();
+		msgBuffer.append("<tr><td>").append(emailTemplate.getTopTextArea())
+			.append("</td></tr><tr><td><p><table style='font-family: verdana, geneva;")
+			.append("font-size: 9pt;' width='500'><tr><td>&nbsp;</td></tr>");
+			
+		for (OpomEmailField sfOpomEmailField : emailTemplate.getSfOpomEmailFieldList()) {
+			msgBuffer.append("<tr><td style='vertical-align: top;'><b>")
+			.append(sfOpomEmailField.getFieldLabel())
+			.append(":</b>&nbsp;</td><td>")
+			.append(sfFieldValue(sfOpomEmailField))
+			.append("</td></tr><tr><td></td></tr>");
+		}
+		
+		msgBuffer.append("</table></p><p><table style='border: 1px solid black; ")
+			.append("border-collapse:collapse; font-family: verdana, geneva; ")
+			.append("font-size: 9pt;'><tr>");
+
+		for (OpomEmailField tfOpomEmailField : emailTemplate.getTfOpomEmailFieldList()) {
+			msgBuffer.append("<th style='border: 1px solid black;'>")
+				.append(tfOpomEmailField.getFieldLabel()).append("</th>");
+		}
+
+		msgBuffer.append("</tr>");
+
+        for (List<String> tfFields : tfFieldValues()) {
+			msgBuffer.append("<tr>");
+			for (String tfFieldValue : tfFields) {
+				msgBuffer.append("<td style='border: 1px solid black;'>")
+				.append(tfFieldValue).append("</td>");
+			}
+			msgBuffer.append("</tr>");
+		}
+
+        StrSubstitutor substitutor = new StrSubstitutor(valuesMap);
+        msgBuffer.append("</table></p></td></tr><tr><td>")
+			.append(substitutor.replace(emailTemplate.getBottomTextArea()))
+			.append("</td></tr>");
+		return msgBuffer.toString();
+	}
+	
+	private void logEmailDetails(String message, String status) {		
+		AutoEmailLog autoEmailLog = new AutoEmailLog(emailTemplate
+			.getEmailTemplateName(), emailContent.firstOpomData.getEmailAddr(),
+			emailContent.firstOpomData.getAcctName(), emailContent.firstOpomData
+			.getSrcAccountNumber(),	message, new Date(System.currentTimeMillis()),
+			emailTemplate.getTopBanner(), emailTemplate.getBottomBanner(), "",
+			status, emailContent.firstOpomData.getSvcNo(), "");
+		
+		Set<OpomDataArchive> opomDataArchives = new HashSet<OpomDataArchive>();
+		for (OpomData opomData : emailContent.opomDataList) {
+			OpomDataArchive opomDataArchive 
+				= new OpomDataArchive(autoEmailLog, opomData);
+			opomDataArchives.add(opomDataArchive);
+		}
+		autoEmailLog.setOpomDataArchives(opomDataArchives);
+		entityManager.persist(autoEmailLog);
+		log.debug("Saved Successfully");
+	}
+	
+	@Transactional
+	public void reSendEmail(AutoEmailLog autoEmailLog) {
+		log.debug("Inside Re sendOrderConfirmEmail");
+		try {
+			if (emailTemplate == null) {
+				emailTemplate = lookupQuery.findEmailTemplateByChannel("Retail");
+			}
+			StringBuffer messageBuffer = new StringBuffer();
+			messageBuffer.append("<html><body>")
+				.append("<table style='font-family: verdana, geneva; font-size: 9pt;' ")
+				.append("width='600' align='center'><tr><td><img src='cid:topImg-id'>")
+				.append("</td></tr><tr><td></td></tr><tr><td>")
+				.append(autoEmailLog.getEmailMessage())
+				.append("</td></tr><tr><td><img src='cid:bottomImg-id'>")
+				.append("</td></tr></table></body></html>");;
+			String message = messageBuffer.toString();
+			EmailSender emailSender = EmailSender.getInstance();
+			emailSender.sendMail(
+					new String[] {"NoReply@optus.com.au", "Optus Business"},
+					new String[] {autoEmailLog.getEmailAddress(), ""},
+					emailTemplate.getSubject(), message, emailTemplate.getTopBanner(), 
+					emailTemplate.getBottomBanner());
+			autoEmailLog.setEmailDateTime(new Date(System.currentTimeMillis()));
+			autoEmailLog.setSendStatus(reSentStatus);
+			log.debug("Email Re sent successfully");			
+			
+		} catch (Exception e) {
+			log.debug("Email Re Sending failed: " + e.getMessage());
+			autoEmailLog.setEmailDateTime(new Date(System.currentTimeMillis()));
+			autoEmailLog.setEmailTemplateName(autoEmailLog.getEmailTemplateName());
+			autoEmailLog.setSendStatus(notReSentStatus);
+		}
+	}
+	
+	public Map<String, List<OpomData>> getOpomDataByOrderNo() {
+		return opomDataByOrderNo;
+	}
+
+	public void setOpomDataByOrderNo(Map<String, List<OpomData>> opomDataByOrderNo) {
+		this.opomDataByOrderNo = opomDataByOrderNo;
+	}
+
+	public Map<String, String> getColumnPropertyMap() {
+		return columnPropertyMap;
+	}
+
+	public void setColumnPropertyMap(Map<String, String> columnPropertyMap) {
+		this.columnPropertyMap = columnPropertyMap;
+	}
+	
+	public Map<String, List<String>> getEmailFieldsByGroupName() {
+		return emailFieldsByGroupName;
+	}
+
+	public void setEmailFieldsByGroupName(
+			Map<String, List<String>> emailFieldsByGroupName) {
+		this.emailFieldsByGroupName = emailFieldsByGroupName;
+	}
+
+	public EmailContent getEmailContent() {
+		return emailContent;
+	}
+
+	public void setEmailContent(EmailContent emailContent) {
+		this.emailContent = emailContent;
+	}
+	
+	public String sfFieldValue(OpomEmailField opomEmailField) {
+		OpomData firstData = this.emailContent.getFirstOpomData();
+		if(emailFieldsByGroupName.containsKey(opomEmailField.getFieldName())) {
+			List<String> fields = emailFieldsByGroupName.get(
+					opomEmailField.getFieldName());
+			StringBuilder sb = new StringBuilder();
+			int nameCount = 0;
+			int fieldCount = 0;
+			int addresslines = 0;
+			for (String field : fields) {
+				String propertyName = this.columnPropertyMap.get(field);
+				try {
+					if (opomEmailField.getFieldType().equals("DATE")) {
+						sb.append(dateFormatter.format(datePaser
+							.parse(firstData.getValue(propertyName))));
+					} else if (opomEmailField.getFieldType().equals("ADDRESS")) {
+						addresslines++;
+						String value = firstData.getValue(propertyName);
+						if (value != null && !value.trim().isEmpty()) {
+							sb.append(value.trim());
+							if (addresslines < 2) {
+								sb.append("<br/>");
+							} else {
+								sb.append(" ");
+							}
+						}
+					}  else if (opomEmailField.getFieldType().equals("NAME")) {
+						if (nameCount == 3)  continue;
+						String nameStr = firstData.getValue(propertyName);
+						if (nameStr != null && !nameStr.isEmpty()) {
+							nameCount++;						
+							sb.append(firstData.getValue(propertyName));
+							sb.append(" ");
+						}
+					} else if (opomEmailField.getFieldType().equals("RETAILSTORE")) {
+						if ("REPORT_PARENT_DEALER_NAME".equalsIgnoreCase(field)) {
+							sb.append(firstData.getValue(propertyName));
+						} else if ("REPORT_PARENT_DEALER_CODE".equalsIgnoreCase(field)) {
+							sb.append(buildRetailStoreDetails(
+									firstData.getValue(propertyName)));
+						}
+					} else if (opomEmailField.getFieldType().equals("EQUIPMENT")) {
+						String equipment = firstData.getValue(propertyName);
+						if (equipment != null && !equipment.isEmpty()) {
+							fieldCount++;						
+							sb.append(firstData.getValue(propertyName));
+							sb.append(" ");
+						}
+						
+						if (fieldCount == 2 && sb.toString().trim().isEmpty()) {
+							sb.append("N/A");
+						}
+					} else {
+						sb.append(firstData.getValue(propertyName));
+					}
+				} catch (SecurityException e) {
+					sb.append("");
+				} catch (IllegalArgumentException e) {
+					sb.append("");
+					e.printStackTrace();
+				} catch (NoSuchFieldException e) {
+					sb.append("");
+				} catch (IllegalAccessException e) {
+					sb.append("");
+				} catch (ParseException e) {
+					sb.append("");
+				}	
+			}
+			if (opomEmailField.getFieldType().equals("NAME")) {
+				emailContent.setCustomerName(sb.toString());
+			} 
+			return sb.toString();
+		} else {
+			String propertyName = this.columnPropertyMap.get(
+					opomEmailField.getFieldName());
+			String fieldValue = "";
+			try {
+				if (opomEmailField.getFieldType().equals("DATE")) {
+					fieldValue = dateFormatter.format(datePaser
+						.parse(firstData.getValue(propertyName)));
+				} else if (opomEmailField.getFieldType().equals("ADDRESS")) {								
+					fieldValue = firstData.getValue(propertyName);
+					fieldValue = fieldValue + "<br/>";
+				} else if (opomEmailField.getFieldType().equals("PRODTYPE")) {
+					fieldValue = firstData.getValue(propertyName);
+					if ("MOB".equalsIgnoreCase(fieldValue)) {
+						fieldValue = "Mobile";
+					}
+					if ("OMB".equalsIgnoreCase(fieldValue)) {
+						fieldValue = "Mobile Broadband";
+					}						
+				} else { 
+					fieldValue = firstData.getValue(propertyName);
+				}
+			} catch (SecurityException e) {
+				fieldValue = "";
+			} catch (IllegalArgumentException e) {
+				fieldValue = "";
+			} catch (NoSuchFieldException e) {
+				fieldValue = "";
+			} catch (IllegalAccessException e) {
+				fieldValue = "";
+			} catch (ParseException e) {
+				fieldValue = "";
+			}
+			if (opomEmailField.getFieldType().equals("EMAIL")) {
+				emailContent.setEmailAddress(fieldValue);
+			}
+			return fieldValue;
+		}
+	}
+
+	private String buildRetailStoreDetails(String dealerCode) {
+		StringBuilder sb = new StringBuilder();
+		RetailStore retailStore = retailStoreByDealerCode.get(dealerCode);
+		if (retailStore != null) {
+		    if (validateAddressLine(retailStore.getRetailStoreAddressLine1())) {
+			    sb.append("<br/>").append(retailStore.getRetailStoreAddressLine1());
+			}	
+		    if (validateAddressLine(retailStore.getRetailStoreAddressLine2())) {
+		    	sb.append("<br/>").append(retailStore.getRetailStoreAddressLine2());
+		   }			
+			sb.append("<br/>")
+			.append(retailStore.getRetailStoreAddressSuburb()).append(" ")
+			.append(retailStore.getRetailStoreAddressState()).append(" ")
+			.append(retailStore.getRetailStoreAddressPostcode())
+			.append("<br/>").append(retailStore.getRetailStorePhone());
+		}
+		return sb.toString();
+	}
+
+	private boolean validateAddressLine(String addressline) {
+		if (addressline != null) {
+			addressline = addressline.trim();
+			boolean isValid = true;
+			if (addressline.equalsIgnoreCase("-")) {
+				isValid = false;
+			} else if (addressline.equalsIgnoreCase("N/A")) {
+				isValid = false;
+			} else if (addressline.equalsIgnoreCase("NA")) {
+				isValid = false;
+			}
+			return isValid;
+		} else {
+			return false;
+		}
+	}
+
+	public List<List<String>> tfFieldValues() {
+		List<List<String>> tfFieldValues = new ArrayList<List<String>>(0);
+		
+		List<OpomData> opomDataList = this.emailContent.getOpomDataList();
+		for (OpomData opomData : opomDataList) {
+			List<OpomEmailField> tfOpomEmailFields = emailTemplate
+					.getTfOpomEmailFieldList();
+			List<String> fieldValues = new ArrayList<String>(0);
+			for (OpomEmailField opomEmailField : tfOpomEmailFields) {
+				if(emailFieldsByGroupName.containsKey(opomEmailField.getFieldName())) {
+					List<String> fields = emailFieldsByGroupName.get(
+							opomEmailField.getFieldName());
+					StringBuilder sb = new StringBuilder();
+					int fieldCount = 0;
+					for (String field : fields) {
+						String propertyName = this.columnPropertyMap.get(field);
+						try {
+							if (opomEmailField.getFieldType().equals("DATE")) {
+								sb.append(dateFormatter.format(datePaser
+									.parse(opomData.getValue(propertyName))));
+							} else if (opomEmailField.getFieldType().equals("ADDRESS")) {								
+								sb.append(opomData.getValue(propertyName));
+								sb.append("<br/>");
+							} else if (opomEmailField.getFieldType().equals("EQUIPMENT")) {
+								String equipment = opomData.getValue(propertyName);
+								if (equipment != null && !equipment.isEmpty()) {					
+									sb.append(opomData.getValue(propertyName));
+									sb.append(" ");
+								}
+								
+								if (++fieldCount == 2 && sb.toString().trim().isEmpty()) {
+									sb.append("N/A");
+								}
+							} else {
+								sb.append(opomData.getValue(propertyName));
+							}							
+						} catch (SecurityException e) {
+							sb.append("");
+						} catch (IllegalArgumentException e) {
+							sb.append("");
+							e.printStackTrace();
+						} catch (NoSuchFieldException e) {
+							sb.append("");
+						} catch (IllegalAccessException e) {
+							sb.append("");
+						} catch (ParseException e) {
+							sb.append("");
+						}	
+					}				
+					fieldValues.add(sb.toString());
+				} else {
+					String propertyName = this.columnPropertyMap.get(
+							opomEmailField.getFieldName());
+					String fieldValue = "";
+					try {
+						if (opomEmailField.getFieldType().equals("DATE")) {
+							fieldValue = dateFormatter.format(datePaser
+								.parse(opomData.getValue(propertyName)));
+						} else if (opomEmailField.getFieldType().equals("ADDRESS")) {								
+							fieldValue = opomData.getValue(propertyName);
+							fieldValue = fieldValue + "<br/>";
+						} else if (opomEmailField.getFieldType().equals("PRODTYPE")) {
+							fieldValue = opomData.getValue(propertyName);
+							if ("MOB".equalsIgnoreCase(fieldValue)) {
+								fieldValue = "Mobile";
+							}
+							if ("OMB".equalsIgnoreCase(fieldValue)) {
+								fieldValue = "Mobile Broadband";
+							}	
+						} else { 
+							fieldValue = opomData.getValue(propertyName);
+						}
+					} catch (SecurityException e) {
+						fieldValue = "";
+					} catch (IllegalArgumentException e) {
+						fieldValue = "";
+					} catch (NoSuchFieldException e) {
+						fieldValue = "";
+					} catch (IllegalAccessException e) {
+						fieldValue = "";
+					} catch (ParseException e) {
+						fieldValue = "";
+					}
+					fieldValues.add(fieldValue);
+				}	
+			}
+			tfFieldValues.add(fieldValues);
+		}
+		return tfFieldValues;
+	}	
+}

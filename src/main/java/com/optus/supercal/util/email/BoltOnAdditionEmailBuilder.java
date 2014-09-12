@@ -1,0 +1,278 @@
+package com.optus.supercal.util.email;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.lang3.text.StrSubstitutor;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.optus.supercal.dao.EmailDAO;
+import com.optus.supercal.dao.GenericDAO;
+import com.optus.supercal.entity.BoltOn;
+import com.optus.supercal.entity.BoltOnAddition;
+import com.optus.supercal.entity.BoltOnFieldValue;
+import com.optus.supercal.entity.EmailBoltOnAddition;
+import com.optus.supercal.entity.EmailTemplate;
+import com.optus.supercal.entity.EmailTemplateBoltOnFieldConfig;
+
+public class BoltOnAdditionEmailBuilder {
+
+	@Autowired
+	EmailDAO emailDAO;
+
+	@Autowired
+	GenericDAO genericDAO;
+
+	private Map<String, List<String>> boltOnEmailFieldMap;
+	private Map<String, Map<String, String>> boltOnAdditionMap;
+
+	private EmailTemplate emailTemplate;
+
+	private EmailContent emailContent;
+
+	private EmailBoltOnAddition emailBoltOnAddition;
+
+	private static String TEMPLATE_TYPE = "BOLT_ON_ADDITIONS_EMAIL";
+
+	private static String sentStatus = "SENT";
+	private static String notSentStatus = "NOTSENT";
+	private static String reSentStatus = "RESENT";
+	private static String notReSentStatus = "NOTRESENT";
+
+	public boolean sendEmail(EmailBoltOnAddition emailBoltOnAddition) {
+		// log.debug("Inside sendBoltOnAdditionConfirmEmail");
+		try {
+			if (emailTemplate == null) {
+				emailTemplate = emailDAO.findEmailTemplate(TEMPLATE_TYPE);
+				;
+			}
+			setEmailBoltOnAddition(emailBoltOnAddition);
+			Set<BoltOnAddition> boltOnAdditions = emailBoltOnAddition
+					.getBoltOnAdditions();
+			boltOnEmailFieldMap = new HashMap<String, List<String>>(0);
+			boltOnAdditionMap = new HashMap<String, Map<String, String>>(0);
+			String boltOnName = "";
+			for (BoltOnAddition boltOnAddition : boltOnAdditions) {
+
+				BoltOn boltOn = (BoltOn) genericDAO.getObject(BoltOn.class,
+						boltOnAddition.getBoltOnId());
+
+				boltOnName = boltOn.getBoltOnName();
+				Map<String, String> fieldValueMap = new HashMap<String, String>();
+				List<String> emailFields = new ArrayList<String>(0);
+
+				Set<BoltOnFieldValue> boltOnFieldValues = boltOn
+						.getBoltOnFieldValues();
+				if ("BOLTON".equals(emailTemplate.getFieldSource())) {
+					List<EmailTemplateBoltOnFieldConfig> boltOnFieldConfigs = emailTemplate
+							.getBoltOnFieldConfigList();
+					String key = "";
+					for (EmailTemplateBoltOnFieldConfig boltOnFieldConfig : boltOnFieldConfigs) {
+						for (BoltOnFieldValue boltOnFieldValue : boltOnFieldValues) {
+							if (boltOnFieldValue.getBoltOnFamilyFieldConfig()
+									.getBoltOnField()
+									.equals(boltOnFieldConfig.getBoltOnField())) {
+								key = boltOnFieldConfig.getBoltOnField()
+										.getFieldName();
+								emailFields.add(key);
+								fieldValueMap.put(key,
+										boltOnFieldValue.getBoltOnFieldValue());
+							}
+						}
+					}
+					boltOnEmailFieldMap.put(boltOnName, emailFields);
+					boltOnAdditionMap.put(boltOnName, fieldValueMap);
+				}
+			}
+
+			try {
+				StringBuffer messageBuffer = new StringBuffer();
+				String message = buildMessage();
+				emailBoltOnAddition.setTopBanner(emailTemplate.getTopBanner());
+				emailBoltOnAddition.setEmailMessage(message);
+				messageBuffer
+						.append("<html><body>")
+						.append("<table style='font-family: verdana, geneva; font-size: 9pt;' width='600' align='center'>")
+						.append("<tr><td><img src='cid:topImg-id'></td></tr>")
+						.append(message)
+						.append("<tr><td><img src='cid:bottomImg-id'></td></tr></table></body></html>");
+				message = messageBuffer.toString();
+				EmailSender emailSender = EmailSender.getInstance();
+				emailSender
+						.sendMail(
+								new String[] { "NoReply@optus.com.au",
+										"Optus Business" },
+								new String[] {
+										emailBoltOnAddition.getEmailAddress(),
+										emailBoltOnAddition
+												.getCustomerFirstName()
+												+ " "
+												+ emailBoltOnAddition
+														.getCustomerSurname() },
+								emailTemplate.getSubject(), message,
+								emailTemplate.getTopBanner(), emailTemplate
+										.getBottomBanner());
+				emailBoltOnAddition.setBottomBanner(emailTemplate
+						.getBottomBanner());
+				emailBoltOnAddition.setEmailDateTime(new Date(System
+						.currentTimeMillis()));
+				emailBoltOnAddition.setEmailTemplate("BoltOnAdditionEmail");
+				emailBoltOnAddition.setSendStatus(sentStatus);
+				// log.debug("Email sent successfully");
+
+			} catch (Exception e) {
+				// log.debug("Email sending failed: " + e.getMessage());
+				emailBoltOnAddition.setEmailDateTime(new Date(System
+						.currentTimeMillis()));
+				emailBoltOnAddition.setEmailTemplate("BoltOnAdditionEmail");
+				emailBoltOnAddition.setSendStatus(notSentStatus);
+				return false;
+			}
+
+		} catch (Exception e) {
+			// log.error("Error sending mail.", e);
+			emailBoltOnAddition.setEmailDateTime(new Date(System
+					.currentTimeMillis()));
+			emailBoltOnAddition.setEmailTemplate("BoltOnAdditionEmail");
+			emailBoltOnAddition.setSendStatus(notSentStatus);
+			return false;
+		}
+		return true;
+	}
+
+	private String buildMessage() {
+		StringBuffer msgBuffer = new StringBuffer();
+		Map<String, String> valuesMap = new HashMap<String, String>();
+		msgBuffer.append(emailBoltOnAddition.getCustomerTitle().trim())
+				.append("&nbsp;")
+				.append(emailBoltOnAddition.getCustomerFirstName().trim())
+				.append("&nbsp;")
+				.append(emailBoltOnAddition.getCustomerSurname().trim());
+		valuesMap.put("CustomerName", msgBuffer.toString());
+		StringBuffer boltOnNames = new StringBuffer();
+		for (String boltOnName : boltOnEmailFieldMap.keySet()) {
+			boltOnNames.append(boltOnName);
+			break;
+		}
+		valuesMap.put("BoltOnName", boltOnNames.toString());
+		StrSubstitutor sub = new StrSubstitutor(valuesMap);
+
+		msgBuffer = new StringBuffer();
+		msgBuffer
+				.append("<tr><td>")
+				.append(sub.replace(emailTemplate.getTopTextArea()))
+				.append("</td></tr><tr><td><table style='font-family: verdana, geneva;")
+				.append("font-size: 9pt;'><tr><td><b>Mobile Service No : </b></td><td>")
+				.append(emailBoltOnAddition.getServiceNo())
+				.append("</td></tr></table>")
+				.append("</td></tr><tr><td>")
+				.append("<p><table style='font-family: verdana, geneva; ")
+				.append("font-size: 9pt; border-collapse:collapse;' width='400px'>")
+				.append("<tr><td style='border: 1px solid black;' width='100px'>")
+				.append("<b>Business Extra Name</b></td>")
+				.append("<td style='border: 1px solid black;' width='300px'>")
+				.append(boltOnNames.toString()).append("</td></tr>");
+		for (String key : boltOnEmailFieldMap.get(boltOnNames.toString())) {
+			msgBuffer
+					.append("<tr><td style='border: 1px solid black;' width='100px'><b>")
+					.append(key)
+					.append("</b></td><td style='border: 1px solid black;' width='300px'>")
+					.append(boltOnAdditionMap.get(boltOnNames.toString()).get(
+							key)).append("</td></tr>");
+		}
+		msgBuffer.append("</table></p></td></tr>");
+		msgBuffer.append("</td></tr><tr><td>")
+				.append(emailTemplate.getBottomTextArea()).append("</td></tr>");
+		return msgBuffer.toString();
+	}
+
+	public boolean reSendEmail(EmailBoltOnAddition emailBoltOnAddition) {
+		// log.debug("Inside Re sendBoltOnAdditionConfirmEmail");
+		try {
+			if (emailTemplate == null) {
+				emailTemplate = emailDAO.findEmailTemplate(TEMPLATE_TYPE);
+			}
+			StringBuffer messageBuffer = new StringBuffer();
+			messageBuffer
+					.append("<html><body>")
+					.append("<table style='font-family: verdana, geneva; font-size: 9pt;' width='600' align='center'>")
+					.append("<tr><td><img src='cid:topImg-id'></td></tr>")
+					.append(emailBoltOnAddition.getEmailMessage())
+					.append("<tr><td><img src='cid:bottomImg-id'></td></tr></table></body></html>");
+			String message = messageBuffer.toString();
+			EmailSender emailSender = EmailSender.getInstance();
+			emailSender
+					.sendMail(
+							new String[] { "NoReply@optus.com.au",
+									"Optus Business" },
+							new String[] {
+									emailBoltOnAddition.getEmailAddress(),
+									emailBoltOnAddition.getCustomerFirstName()
+											+ " "
+											+ emailBoltOnAddition
+													.getCustomerSurname() },
+							emailTemplate.getSubject(), message,
+							emailBoltOnAddition.getTopBanner(),
+							emailBoltOnAddition.getBottomBanner());
+			emailBoltOnAddition.setEmailDateTime(new Date(System
+					.currentTimeMillis()));
+			emailBoltOnAddition.setSendStatus(reSentStatus);
+			// log.debug("Email Re sent successfully");
+
+		} catch (Exception e) {
+			// log.debug("Email Re Sending failed: " + e.getMessage());
+			emailBoltOnAddition.setEmailDateTime(new Date(System
+					.currentTimeMillis()));
+			emailBoltOnAddition.setEmailTemplate("BoltOnAdditionEmail");
+			emailBoltOnAddition.setSendStatus(notReSentStatus);
+			return false;
+		}
+		return true;
+	}
+
+	public Map<String, List<String>> getBoltOnEmailFieldMap() {
+		return boltOnEmailFieldMap;
+	}
+
+	public void setBoltOnEmailFieldMap(
+			Map<String, List<String>> boltOnEmailFieldMap) {
+		this.boltOnEmailFieldMap = boltOnEmailFieldMap;
+	}
+
+	public Map<String, Map<String, String>> getBoltOnAdditionMap() {
+		return boltOnAdditionMap;
+	}
+
+	public void setBoltOnAdditionMap(
+			Map<String, Map<String, String>> boltOnAdditionMap) {
+		this.boltOnAdditionMap = boltOnAdditionMap;
+	}
+
+	public EmailTemplate getEmailTemplate() {
+		return emailTemplate;
+	}
+
+	public void setEmailTemplate(EmailTemplate emailTemplate) {
+		this.emailTemplate = emailTemplate;
+	}
+
+	public EmailBoltOnAddition getEmailBoltOnAddition() {
+		return emailBoltOnAddition;
+	}
+
+	public void setEmailBoltOnAddition(EmailBoltOnAddition emailBoltOnAddition) {
+		this.emailBoltOnAddition = emailBoltOnAddition;
+	}
+
+	public EmailContent getEmailContent() {
+		return emailContent;
+	}
+
+	public void setEmailContent(EmailContent emailContent) {
+		this.emailContent = emailContent;
+	}
+}
